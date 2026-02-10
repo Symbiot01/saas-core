@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>saas-core Simple Example</title>
+    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-auth.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            padding: 32px;
+            max-width: 600px;
+            width: 100%;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 8px;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 32px;
+            font-size: 14px;
+        }
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            margin: 8px 8px 8px 0;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: #4285f4;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #357ae8;
+            transform: translateY(-1px);
+        }
+        .btn-secondary {
+            background: #34a853;
+            color: white;
+        }
+        .btn-secondary:hover {
+            background: #2d8f47;
+        }
+        .btn-danger {
+            background: #ea4335;
+            color: white;
+        }
+        .btn-danger:hover {
+            background: #d33b2c;
+        }
+        .user-info {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .user-info p {
+            margin: 8px 0;
+            color: #555;
+        }
+        .api-response {
+            background: #f8f9fa;
+            padding: 16px;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+        .api-response pre {
+            background: white;
+            padding: 12px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 12px;
+            margin-top: 12px;
+        }
+        .error {
+            background: #fee;
+            border: 1px solid #fcc;
+            color: #c33;
+            padding: 12px;
+            border-radius: 6px;
+            margin-top: 16px;
+        }
+        .info {
+            margin-top: 24px;
+            padding-top: 24px;
+            border-top: 1px solid #e0e0e0;
+            font-size: 12px;
+            color: #888;
+        }
+        #signInSection {
+            text-align: center;
+            padding: 20px 0;
+        }
+        #userSection {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 saas-core Simple Example</h1>
+        <p class="subtitle">HTML + Firebase + FastAPI</p>
+
+        <!-- Sign In Section -->
+        <div id="signInSection">
+            <p>Sign in with Google to get started</p>
+            <button class="btn-primary" onclick="signIn()">Sign in with Google</button>
+        </div>
+
+        <!-- User Section -->
+        <div id="userSection">
+            <div class="user-info">
+                <h2>Welcome! 👋</h2>
+                <p><strong>Email:</strong> <span id="userEmail"></span></p>
+                <p><strong>User ID:</strong> <span id="userId"></span></p>
+                <p><strong>Token:</strong> <span id="tokenPreview"></span></p>
+            </div>
+
+            <div>
+                <button class="btn-secondary" onclick="callProtectedAPI()">Call Protected API</button>
+                <button class="btn-secondary" onclick="getProfile()">Get Profile</button>
+                <button class="btn-danger" onclick="signOut()">Sign Out</button>
+            </div>
+
+            <div class="api-response" id="apiResponse" style="display: none;">
+                <h3>API Response:</h3>
+                <pre id="apiData"></pre>
+            </div>
+        </div>
+
+        <div class="error" id="error" style="display: none;"></div>
+
+        <div class="info">
+            <p><strong>Backend:</strong> <span id="backendUrl">http://localhost:8000</span></p>
+            <p><strong>Status:</strong> <span id="status">❌ Not authenticated</span></p>
+        </div>
+    </div>
+
+    <script>
+        // ============================================================================
+        // CONFIGURE FIREBASE HERE
+        // ============================================================================
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_PROJECT.firebaseapp.com",
+            projectId: "YOUR_PROJECT_ID",  // Must match SAAS_CORE_GOOGLE_PROJECT_ID
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const provider = new firebase.auth.GoogleAuthProvider();
+
+        // Backend API URL
+        const API_URL = 'http://localhost:8000';
+
+        let currentToken = null;
+
+        // Listen for auth state changes
+        auth.onAuthStateChanged(async (user) => {
+            if (user) {
+                // User is signed in
+                currentToken = await user.getIdToken();
+                document.getElementById('userEmail').textContent = user.email;
+                document.getElementById('userId').textContent = user.uid;
+                document.getElementById('tokenPreview').textContent = currentToken.substring(0, 50) + '...';
+                document.getElementById('signInSection').style.display = 'none';
+                document.getElementById('userSection').style.display = 'block';
+                document.getElementById('status').textContent = '✅ Authenticated';
+            } else {
+                // User is signed out
+                currentToken = null;
+                document.getElementById('signInSection').style.display = 'block';
+                document.getElementById('userSection').style.display = 'none';
+                document.getElementById('apiResponse').style.display = 'none';
+                document.getElementById('status').textContent = '❌ Not authenticated';
+            }
+        });
+
+        async function signIn() {
+            try {
+                hideError();
+                const result = await auth.signInWithPopup(provider);
+                console.log('Signed in:', result.user.email);
+            } catch (error) {
+                showError('Sign in error: ' + error.message);
+                console.error('Sign in error:', error);
+            }
+        }
+
+        async function signOut() {
+            try {
+                await auth.signOut();
+                hideError();
+                console.log('Signed out');
+            } catch (error) {
+                showError('Sign out error: ' + error.message);
+                console.error('Sign out error:', error);
+            }
+        }
+
+        async function callProtectedAPI() {
+            if (!currentToken) {
+                showError('No token available');
+                return;
+            }
+
+            try {
+                hideError();
+                const response = await fetch(`${API_URL}/api/protected`, {
+                    headers: {
+                        'Authorization': `Bearer ${currentToken}`
+                    }
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Failed to fetch data');
+                }
+
+                const data = await response.json();
+                showApiResponse(data);
+                console.log('API Response:', data);
+            } catch (error) {
+                showError('API error: ' + error.message);
+                console.error('API error:', error);
+            }
+        }
+
+        async function getProfile() {
+            if (!currentToken) {
+                showError('No token available');
+                return;
+            }
+
+            try {
+                hideError();
+                const response = await fetch(`${API_URL}/api/user/profile`, {
+                    headers: {
+                        'Authorization': `Bearer ${currentToken}`
+                    }
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Failed to fetch profile');
+                }
+
+                const data = await response.json();
+                showApiResponse(data);
+                console.log('Profile Response:', data);
+            } catch (error) {
+                showError('API error: ' + error.message);
+                console.error('API error:', error);
+            }
+        }
+
+        function showApiResponse(data) {
+            document.getElementById('apiData').textContent = JSON.stringify(data, null, 2);
+            document.getElementById('apiResponse').style.display = 'block';
+        }
+
+        function showError(message) {
+            document.getElementById('error').textContent = message;
+            document.getElementById('error').style.display = 'block';
+        }
+
+        function hideError() {
+            document.getElementById('error').style.display = 'none';
+        }
+    </script>
+</body>
+</html>
