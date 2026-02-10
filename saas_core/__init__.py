@@ -6,7 +6,7 @@ It is designed to be consumed by all services in a microservices architecture fo
 authentication.
 """
 
-from saas_core.auth import verify_user, get_google_public_keys
+from saas_core.auth import verify_user
 from saas_core.exceptions import (
     AuthenticationError,
     EmailNotVerifiedError,
@@ -17,7 +17,6 @@ from saas_core.exceptions import (
 __version__ = "0.1.0"
 __all__ = [
     "verify_user",
-    "get_google_public_keys",
     "AuthenticationError",
     "EmailNotVerifiedError",
     "ConfigurationError",

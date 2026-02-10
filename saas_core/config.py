@@ -5,8 +5,9 @@ This module handles all environment variable loading and validation
 using Pydantic's BaseSettings.
 """
 
+import json
 import os
-from typing import ClassVar, Optional
+from typing import Optional
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -20,47 +21,38 @@ class AuthConfig(BaseSettings):
     All settings are loaded from environment variables prefixed with SAAS_CORE_.
     """
 
-    # Google's JWKS endpoint for GCIP (not configurable, always the same)
-    GOOGLE_JWKS_ENDPOINT: ClassVar[str] = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com"
-
     model_config = SettingsConfigDict(
         env_prefix="SAAS_CORE_",
         case_sensitive=False,
         extra="ignore",
     )
 
-    # Required settings
+    # Option 1: Path to Firebase service account JSON file
+    # Environment variable: SAAS_CORE_FIREBASE_CREDENTIALS_PATH
+    firebase_credentials_path: Optional[str] = Field(
+        default=None,
+        description="Path to Firebase service account JSON file",
+    )
+
+    # Option 2: Firebase service account JSON as string
+    # Environment variable: SAAS_CORE_FIREBASE_CREDENTIALS_JSON
+    firebase_credentials_json: Optional[str] = Field(
+        default=None,
+        description="Firebase service account JSON as string (alternative to file path)",
+    )
+
+    # Option 3: Firebase project ID (if using Application Default Credentials)
     # Environment variable: SAAS_CORE_GOOGLE_PROJECT_ID
-    google_project_id: str = Field(
-        ...,
-        description="Google Cloud Identity Platform project ID",
+    google_project_id: Optional[str] = Field(
+        default=None,
+        description="Google Cloud project ID (for Application Default Credentials)",
     )
 
     # Optional settings with defaults
-    # Environment variable: SAAS_CORE_GOOGLE_AUDIENCE
-    google_audience: Optional[str] = Field(
-        default=None,
-        description="Custom audience for token validation (defaults to project_id)",
-    )
-
     # Environment variable: SAAS_CORE_REQUIRE_EMAIL_VERIFIED
     require_email_verified: bool = Field(
         default=True,
         description="Require email verification (default: True)",
-    )
-
-    # Environment variable: SAAS_CORE_JWKS_CACHE_TTL
-    jwks_cache_ttl: int = Field(
-        default=3600,
-        description="JWKS cache TTL in seconds (default: 3600)",
-        ge=1,
-    )
-
-    # Environment variable: SAAS_CORE_JWT_LEEWAY
-    jwt_leeway: int = Field(
-        default=60,
-        description="JWT clock skew tolerance in seconds (default: 60)",
-        ge=0,
     )
 
     @field_validator("require_email_verified", mode="before")
@@ -73,22 +65,40 @@ class AuthConfig(BaseSettings):
             return v.lower() in ("true", "1", "yes", "on")
         return bool(v)
 
-    @property
-    def audience(self) -> str:
-        """Get audience, defaulting to project_id if not set."""
-        return self.google_audience or self.google_project_id
-
-    @property
-    def issuer_url(self) -> str:
-        """Get the issuer URL for GCIP."""
-        return f"https://securetoken.google.com/{self.google_project_id}"
+    @field_validator("firebase_credentials_json", mode="before")
+    @classmethod
+    def parse_json_string(cls, v):
+        """Parse JSON string if provided."""
+        if v is None or isinstance(v, dict):
+            return v
+        if isinstance(v, str):
+            # Try to parse as JSON to validate it
+            try:
+                json.loads(v)
+            except json.JSONDecodeError:
+                raise ValueError("SAAS_CORE_FIREBASE_CREDENTIALS_JSON must be valid JSON")
+            return v
+        return v
 
     def model_post_init(self, __context):
         """Validate configuration after initialization."""
-        if not self.google_project_id:
+        if not self.firebase_credentials_path and not self.firebase_credentials_json and not self.google_project_id:
             raise ConfigurationError(
-                "SAAS_CORE_GOOGLE_PROJECT_ID environment variable is required"
+                "One of the following must be set: "
+                "SAAS_CORE_FIREBASE_CREDENTIALS_PATH, "
+                "SAAS_CORE_FIREBASE_CREDENTIALS_JSON, or "
+                "SAAS_CORE_GOOGLE_PROJECT_ID"
             )
+
+    def get_firebase_credentials_dict(self) -> Optional[dict]:
+        """Get Firebase credentials as a dictionary.
+        
+        Returns:
+            dict if credentials_json is set, None otherwise.
+        """
+        if self.firebase_credentials_json:
+            return json.loads(self.firebase_credentials_json)
+        return None
 
 
 # Global config instance - will be initialized on first access

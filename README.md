@@ -1,19 +1,20 @@
 # saas-core
 
-Core authentication library for Hub & Spoke SaaS architecture with Google Cloud Identity Platform (GCIP) integration.
+Core authentication library for Hub & Spoke SaaS architecture with Google Cloud Identity Platform (GCIP) / Firebase Authentication integration.
 
 ## Overview
 
-`saas-core` provides centralized, stateless JWT authentication verification for microservices architectures. It integrates with Google Cloud Identity Platform (GCIP) / Firebase Authentication to verify tokens issued by Google's identity services.
+`saas-core` provides a simple, consistent wrapper around Firebase Admin SDK for JWT authentication verification across microservices. It eliminates the need to copy-paste Firebase initialization and token verification code into every service.
 
 ### Key Features
 
-- **Stateless JWT Verification**: Verify tokens without database lookups
-- **GCIP Integration**: Full support for Google Cloud Identity Platform tokens
-- **Automatic Key Management**: Fetches and caches Google's public keys with automatic rotation handling
-- **Comprehensive Security**: Validates signatures, expiration, issuer, audience, and email verification
+- **Firebase Admin SDK Wrapper**: Uses the battle-tested Firebase Admin SDK under the hood
+- **DRY Principle**: Write Firebase initialization and verification logic once, use everywhere
+- **Automatic Initialization**: Handles Firebase Admin SDK setup automatically
+- **Consistent Error Handling**: Standardized error messages across all services
+- **Email Verification**: Configurable email verification requirement
 - **Framework Agnostic**: Works with any Python web framework (FastAPI, Flask, Django, etc.)
-- **Zero Configuration**: Simple environment variable setup
+- **Simple Configuration**: Just set environment variables
 
 ## Installation
 
@@ -33,15 +34,31 @@ pip install -e .
 
 ## Quick Start
 
-### 1. Set Up Google Cloud Identity Platform
+### 1. Set Up Firebase / Google Cloud Identity Platform
 
 1. Create a Google Cloud project
-2. Enable Identity Platform API
+2. Enable Firebase Authentication / Identity Platform API
 3. Configure authentication providers (Google Sign-In, Email/Password, etc.)
-4. Note your Project ID
+4. Download your service account JSON key from Firebase Console:
+   - Go to Project Settings → Service Accounts
+   - Click "Generate New Private Key"
+   - Save the JSON file securely
 
 ### 2. Configure Environment Variables
 
+**Option 1: Service Account JSON File (Recommended for Local Development)**
+```bash
+export SAAS_CORE_FIREBASE_CREDENTIALS_PATH=/path/to/serviceAccountKey.json
+export SAAS_CORE_REQUIRE_EMAIL_VERIFIED=True
+```
+
+**Option 2: Service Account JSON String (Recommended for Containers/CI)**
+```bash
+export SAAS_CORE_FIREBASE_CREDENTIALS_JSON='{"type":"service_account","project_id":"...","private_key_id":"...","private_key":"...","client_email":"...","client_id":"...","auth_uri":"...","token_uri":"...","auth_provider_x509_cert_url":"...","client_x509_cert_url":"..."}'
+export SAAS_CORE_REQUIRE_EMAIL_VERIFIED=True
+```
+
+**Option 3: Project ID (For Google Cloud environments with Application Default Credentials)**
 ```bash
 export SAAS_CORE_GOOGLE_PROJECT_ID=your-project-id
 export SAAS_CORE_REQUIRE_EMAIL_VERIFIED=True
@@ -78,30 +95,26 @@ async def protected_endpoint(user: dict = Depends(get_current_user)):
 
 All environment variables are prefixed with `SAAS_CORE_` to avoid conflicts:
 
-### Required
+### Required (One of the following)
 
-- **`SAAS_CORE_GOOGLE_PROJECT_ID`**: Your Google Cloud project ID
-  - Used to construct issuer URL: `https://securetoken.google.com/{project_id}`
-  - Used as default audience for token validation
+- **`SAAS_CORE_FIREBASE_CREDENTIALS_PATH`**: Path to Firebase service account JSON file
+  - Recommended for local development
+  - Download from Firebase Console → Project Settings → Service Accounts
+
+- **`SAAS_CORE_FIREBASE_CREDENTIALS_JSON`**: Firebase service account JSON as string
+  - Recommended for containers, CI/CD, and environments where mounting files is difficult
+  - Pass the entire JSON content as a string (can be minified or formatted)
+  - JSON is validated on load
+
+- **`SAAS_CORE_GOOGLE_PROJECT_ID`**: Google Cloud project ID
+  - Use this if running on Google Cloud (GCE, Cloud Run, etc.) with Application Default Credentials
+  - Alternative to service account JSON file or string
 
 ### Optional
-
-- **`SAAS_CORE_GOOGLE_AUDIENCE`**: Custom audience (defaults to project ID)
-  - Override the default audience if needed
-  - Must match the audience in your JWT tokens
 
 - **`SAAS_CORE_REQUIRE_EMAIL_VERIFIED`**: Require email verification (default: `True`)
   - Set to `False` to allow unverified emails (not recommended for production)
   - Accepts: `true`, `True`, `1`, `yes`, `false`, `False`, `0`, `no`
-
-- **`SAAS_CORE_JWKS_CACHE_TTL`**: Public key cache TTL in seconds (default: `3600`)
-  - Controls how long Google's public keys are cached
-  - Shorter TTL = more frequent updates, more API calls
-  - Longer TTL = fewer API calls, slower key rotation handling
-
-- **`SAAS_CORE_JWT_LEEWAY`**: Clock skew tolerance in seconds (default: `60`)
-  - Allows for small clock differences between servers
-  - Prevents false rejections due to minor time discrepancies
 
 - **`SAAS_CORE_DATABASE_URL`**: Database connection string (placeholder for future use)
   - Not currently used - database functionality is a placeholder
@@ -117,7 +130,7 @@ Verify a JWT token from Google Cloud Identity Platform.
 
 **Returns:**
 - `dict`: User information dictionary with keys:
-  - `uid` (str): User ID from 'sub' claim
+  - `uid` (str): User ID from Firebase
   - `email` (str): User email address
   - `email_verified` (bool): Email verification status
   - `auth_time` (int, optional): Authentication timestamp
@@ -136,42 +149,39 @@ user_info = verify_user(token)
 print(user_info["uid"])  # "user123"
 ```
 
-### `get_google_public_keys() -> dict`
+## Firebase / GCIP Integration
 
-Fetch and cache Google's public keys from JWKS endpoint.
+### Why Use a Wrapper?
 
-**Returns:**
-- `dict`: Dictionary mapping key_id (kid) to PEM-encoded public key string
+Instead of copy-pasting Firebase Admin SDK initialization and verification code into every service, `saas-core` provides a simple wrapper that:
 
-**Raises:**
-- `AuthenticationError`: If keys cannot be fetched
-- `ConfigurationError`: If configuration is invalid
-
-## GCIP Integration
+1. **Initializes Firebase Admin SDK** automatically (only once)
+2. **Handles token verification** with consistent error handling
+3. **Checks email verification** if required
+4. **Returns standardized user info** dictionary
 
 ### Authentication Flow
 
-1. **Client Side**: User authenticates with GCIP (via Firebase SDK or Google Identity Services)
-2. **Token Issuance**: GCIP issues a JWT token containing user information
+1. **Client Side**: User authenticates with Firebase (via Firebase SDK)
+2. **Token Issuance**: Firebase issues a JWT ID token
 3. **Server Side**: Service receives request with JWT token in Authorization header
-4. **Verification**: `saas-core` verifies the token:
-   - Fetches Google's public keys (with caching)
-   - Verifies JWT signature using RS256
-   - Validates all claims (iss, aud, exp, iat, nbf)
-   - Checks email verification status
+4. **Verification**: `saas-core` wraps Firebase Admin SDK's `verify_id_token()`:
+   - Initializes Firebase Admin SDK (if not already done)
+   - Calls `auth.verify_id_token(token)` - Firebase handles all JWT verification
+   - Checks email verification status (if required)
+   - Returns standardized user info
 5. **User Info**: Returns verified user information
 
-### Token Claims
+### What Firebase Admin SDK Handles
 
-GCIP tokens contain the following claims:
-- `sub`: User ID (unique Google identifier)
-- `email`: User email address
-- `email_verified`: Boolean indicating email verification status
-- `iss`: Issuer URL (`https://securetoken.google.com/{project_id}`)
-- `aud`: Audience (project ID or custom)
-- `exp`: Expiration timestamp
-- `iat`: Issued at timestamp
-- `auth_time`: Authentication timestamp
+Firebase Admin SDK automatically:
+- Fetches and caches Google's public keys
+- Verifies JWT signature using RS256
+- Validates all claims (iss, aud, exp, iat, nbf)
+- Handles key rotation
+- Manages certificate caching
+
+You don't need to worry about any of this - Firebase Admin SDK does it all!
 
 ## Security Considerations
 
@@ -181,7 +191,8 @@ GCIP tokens contain the following claims:
 2. **Require Email Verification**: Keep `SAAS_CORE_REQUIRE_EMAIL_VERIFIED=True` in production.
 3. **Use HTTPS**: Always use HTTPS in production to protect tokens in transit.
 4. **Handle Errors Securely**: Don't expose sensitive information in error messages.
-5. **Monitor Key Rotation**: Public keys are cached but automatically refreshed on rotation.
+5. **Secure Service Account Keys**: Keep your Firebase service account JSON file secure and never commit it to version control.
+6. **Use Application Default Credentials**: On Google Cloud, prefer `SAAS_CORE_GOOGLE_PROJECT_ID` over service account files.
 
 ### Zero-Trust Architecture
 
@@ -266,8 +277,8 @@ For issues and questions:
 
 ### 0.1.0 (Initial Release)
 
-- Initial release with GCIP JWT verification
-- Public key caching and rotation handling
-- Comprehensive claim validation
+- Initial release with Firebase Admin SDK wrapper
+- Automatic Firebase initialization
+- Consistent error handling
 - Email verification enforcement
 - Framework-agnostic design

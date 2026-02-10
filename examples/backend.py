@@ -5,7 +5,13 @@ This backend demonstrates how to verify JWT tokens from Firebase/GCIP
 using the saas-core library.
 
 Run with:
+    # Option 1: Service account JSON file
+    export SAAS_CORE_FIREBASE_CREDENTIALS_PATH=/path/to/serviceAccountKey.json
+    # OR Option 2: Service account JSON as string (for containers)
+    export SAAS_CORE_FIREBASE_CREDENTIALS_JSON='{"type":"service_account",...}'
+    # OR Option 3: Project ID (for Google Cloud environments)
     export SAAS_CORE_GOOGLE_PROJECT_ID=your-project-id
+    
     uvicorn examples.backend:app --reload --port 8000
 """
 
@@ -57,7 +63,8 @@ async def get_current_user(authorization: str = Header(...)) -> dict:
         raise HTTPException(
             status_code=500,
             detail=(
-                "Backend misconfigured. Set SAAS_CORE_GOOGLE_PROJECT_ID (and restart). "
+                "Backend misconfigured. Set one of: SAAS_CORE_FIREBASE_CREDENTIALS_PATH, "
+                "SAAS_CORE_FIREBASE_CREDENTIALS_JSON, or SAAS_CORE_GOOGLE_PROJECT_ID (and restart). "
                 f"Details: {str(e)}"
             ),
         )

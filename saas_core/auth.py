@@ -1,140 +1,96 @@
 """
-Authentication module for Google Cloud Identity Platform (GCIP) JWT verification.
+Authentication module using Firebase Admin SDK.
 
-This module provides stateless JWT token verification using Google's public keys
-from the JWKS endpoint. It handles key caching, rotation, and comprehensive
-claim validation.
+This module provides a simple wrapper around Firebase Admin SDK's
+verify_id_token function for consistent token verification across services.
 """
 
-import time
-from typing import Dict
+import json
+from typing import Dict, Optional
 
-import httpx
-import jwt
-from cryptography.hazmat.primitives import serialization
-from cryptography import x509
+import firebase_admin
+from firebase_admin import auth, credentials
 
 from saas_core.config import get_config
-from saas_core.exceptions import AuthenticationError, EmailNotVerifiedError
+from saas_core.exceptions import AuthenticationError, EmailNotVerifiedError, ConfigurationError
 
-# In-memory cache for public keys
-_key_cache: Dict[str, Dict] = {}
+# Track if Firebase Admin has been initialized
+_firebase_initialized = False
 
 
-def get_google_public_keys() -> Dict[str, str]:
-    """Fetch and cache Google's public keys from JWKS endpoint.
-
-    Returns:
-        Dictionary mapping key_id (kid) to PEM-encoded public key string.
+def _initialize_firebase():
+    """Initialize Firebase Admin SDK (only once).
 
     Raises:
-        AuthenticationError: If keys cannot be fetched.
+        ConfigurationError: If Firebase credentials are missing or invalid.
     """
+    global _firebase_initialized
+
+    if _firebase_initialized:
+        return
+
     config = get_config()
-    cache_key = "google_public_keys"
-    cache_ttl = config.jwks_cache_ttl
 
-    # Check cache
-    if cache_key in _key_cache:
-        cached_data = _key_cache[cache_key]
-        if time.time() - cached_data["timestamp"] < cache_ttl:
-            return cached_data["keys"]
+    # Check if already initialized (e.g., by another library)
+    if firebase_admin._apps:
+        _firebase_initialized = True
+        return
 
-    # Fetch keys from Google
     try:
-        with httpx.Client(timeout=10.0) as client:
-            response = client.get(config.GOOGLE_JWKS_ENDPOINT)
-            response.raise_for_status()
-            certs_dict = response.json()
-    except httpx.HTTPError as e:
-        raise AuthenticationError(f"Failed to fetch Google public keys: {str(e)}")
-
-    # Convert X.509 certificates to RSA public keys
-    public_keys = {}
-    for key_id, cert_pem in certs_dict.items():
-        try:
-            # Load the X.509 certificate
-            cert = x509.load_pem_x509_certificate(cert_pem.encode())
-            # Extract the public key
-            public_key = cert.public_key()
-            # Serialize to PEM format
-            pem_key = public_key.public_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        if config.firebase_credentials_path:
+            # Initialize with service account JSON file
+            cred = credentials.Certificate(config.firebase_credentials_path)
+            firebase_admin.initialize_app(cred)
+        elif config.firebase_credentials_json:
+            # Initialize with service account JSON from environment variable
+            cred_dict = config.get_firebase_credentials_dict()
+            cred = credentials.Certificate(cred_dict)
+            firebase_admin.initialize_app(cred)
+        elif config.google_project_id:
+            # Initialize with Application Default Credentials
+            firebase_admin.initialize_app(
+                options={"projectId": config.google_project_id}
             )
-            public_keys[key_id] = pem_key.decode()
-        except Exception as e:
-            # Skip invalid keys but log the error
-            continue
+        else:
+            raise ConfigurationError(
+                "Firebase credentials not configured. Set one of: "
+                "SAAS_CORE_FIREBASE_CREDENTIALS_PATH, "
+                "SAAS_CORE_FIREBASE_CREDENTIALS_JSON, or "
+                "SAAS_CORE_GOOGLE_PROJECT_ID"
+            )
 
-    # Update cache
-    _key_cache[cache_key] = {
-        "keys": public_keys,
-        "timestamp": time.time(),
-    }
+        _firebase_initialized = True
 
-    return public_keys
-
-
-def _decode_token_header(token: str) -> Dict:
-    """Extract and decode the JWT header without verification.
-
-    Args:
-        token: JWT token string.
-
-    Returns:
-        Decoded header dictionary.
-
-    Raises:
-        AuthenticationError: If token header is invalid.
-    """
-    try:
-        header = jwt.get_unverified_header(token)
-        return header
-    except jwt.DecodeError as e:
-        raise AuthenticationError(f"Invalid token format: {str(e)}")
-
-
-def _get_verification_options(config) -> Dict:
-    """Build PyJWT verification options.
-
-    Args:
-        config: AuthConfig instance.
-
-    Returns:
-        Dictionary of verification options for PyJWT.
-    """
-    return {
-        "verify_signature": True,
-        "verify_exp": True,
-        "verify_iss": True,
-        "verify_aud": True,
-        "verify_iat": True,
-        "verify_nbf": True,
-        "issuer": config.issuer_url,
-        "audience": config.audience,
-        "algorithms": ["RS256"],
-        "leeway": config.jwt_leeway,
-    }
+    except FileNotFoundError as e:
+        raise ConfigurationError(
+            f"Firebase credentials file not found: {config.firebase_credentials_path}"
+        ) from e
+    except json.JSONDecodeError as e:
+        raise ConfigurationError(
+            f"Invalid JSON in SAAS_CORE_FIREBASE_CREDENTIALS_JSON: {str(e)}"
+        ) from e
+    except Exception as e:
+        raise ConfigurationError(
+            f"Failed to initialize Firebase Admin SDK: {str(e)}"
+        ) from e
 
 
 def verify_user(token: str) -> Dict[str, any]:
-    """Verify a JWT token from Google Cloud Identity Platform.
+    """Verify a Firebase ID token using Firebase Admin SDK.
 
-    This function performs comprehensive token verification:
-    - Fetches and caches Google's public keys
-    - Verifies JWT signature using RS256
-    - Validates all standard claims (iss, aud, exp, iat, nbf)
-    - Checks email verification status (if required)
-    - Extracts user identity information
+    This is a wrapper around Firebase Admin SDK's verify_id_token that:
+    - Handles Firebase initialization automatically
+    - Provides consistent error handling
+    - Checks email verification if required
+    - Returns a standardized user info dictionary
 
     Args:
-        token: JWT token string (typically from Authorization header).
+        token: Firebase ID token string (typically from Authorization header).
 
     Returns:
         Dictionary containing user information:
         {
-            "uid": str,              # User ID from 'sub' claim
+            "uid": str,              # User ID
             "email": str,            # User email
             "email_verified": bool,  # Email verification status
             "auth_time": int,       # Authentication time (if available)
@@ -143,7 +99,7 @@ def verify_user(token: str) -> Dict[str, any]:
     Raises:
         AuthenticationError: If token is invalid, expired, or verification fails.
         EmailNotVerifiedError: If email verification is required but not verified.
-        ConfigurationError: If configuration is missing or invalid.
+        ConfigurationError: If Firebase is not properly configured.
 
     Example:
         >>> token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
@@ -154,61 +110,35 @@ def verify_user(token: str) -> Dict[str, any]:
     if not token or not isinstance(token, str):
         raise AuthenticationError("Token must be a non-empty string")
 
+    # Initialize Firebase Admin SDK (only happens once)
+    _initialize_firebase()
+
     # Get configuration
     config = get_config()
 
-    # Decode header to get key ID
-    header = _decode_token_header(token)
-    key_id = header.get("kid")
-
-    if not key_id:
-        raise AuthenticationError("Token header missing 'kid' (key ID)")
-
-    # Get public keys
-    public_keys = get_google_public_keys()
-
-    if key_id not in public_keys:
-        # Key might have rotated, try refreshing cache
-        _key_cache.clear()
-        public_keys = get_google_public_keys()
-
-        if key_id not in public_keys:
-            raise AuthenticationError(
-                f"Public key with ID '{key_id}' not found in Google's JWKS"
-            )
-
-    # Get verification options
-    verification_options = _get_verification_options(config)
-
-    # Verify and decode token
+    # Verify token using Firebase Admin SDK
     try:
-        decoded_token = jwt.decode(
-            token,
-            public_keys[key_id],
-            **verification_options,
-        )
-    except jwt.ExpiredSignatureError:
+        decoded_token = auth.verify_id_token(token)
+    except firebase_admin.exceptions.InvalidArgumentError as e:
+        raise AuthenticationError(f"Invalid token: {str(e)}")
+    except firebase_admin.exceptions.ExpiredIdTokenError:
         raise AuthenticationError("Token has expired")
-    except jwt.InvalidIssuerError:
-        raise AuthenticationError("Token issuer is invalid")
-    except jwt.InvalidAudienceError:
-        raise AuthenticationError("Token audience is invalid")
-    except jwt.InvalidSignatureError:
-        raise AuthenticationError("Token signature is invalid")
-    except jwt.InvalidTokenError as e:
-        raise AuthenticationError(f"Token validation failed: {str(e)}")
+    except firebase_admin.exceptions.RevokedIdTokenError:
+        raise AuthenticationError("Token has been revoked")
+    except firebase_admin.exceptions.CertificateFetchError as e:
+        raise AuthenticationError(f"Failed to fetch certificate: {str(e)}")
+    except Exception as e:
+        # Catch any other Firebase Admin errors
+        raise AuthenticationError(f"Token verification failed: {str(e)}")
 
     # Extract user information
-    uid = decoded_token.get("sub")
+    uid = decoded_token.get("uid")
     email = decoded_token.get("email")
     email_verified = decoded_token.get("email_verified", False)
     auth_time = decoded_token.get("auth_time")
 
     if not uid:
-        raise AuthenticationError("Token missing 'sub' (subject/user_id) claim")
-
-    if not email:
-        raise AuthenticationError("Token missing 'email' claim")
+        raise AuthenticationError("Token missing 'uid' claim")
 
     # Check email verification if required
     if config.require_email_verified and not email_verified:
