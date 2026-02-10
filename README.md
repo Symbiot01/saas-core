@@ -270,8 +270,7 @@ Contributions are welcome! Please open an issue or submit a pull request.
 ## Support
 
 For issues and questions:
-- GitHub Issues: https://github.com/yourusername/saas-core/issues
-- Documentation: https://github.com/yourusername/saas-core#readme
+- GitHub Issues: https://github.com/Symbiot01/saas-core/issues
 
 ## Changelog
 
